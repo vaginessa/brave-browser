@@ -4,7 +4,7 @@ pipeline {
         // 15m quiet period as described at https://jenkins.io/blog/2010/08/11/quiet-period-feature/
         // quietPeriod(900)
         disableConcurrentBuilds()
-        // timeout(time: 4, unit: 'HOURS')
+        timeout(time: 3, unit: 'HOURS')
         timestamps()
     }
     environment {
@@ -19,6 +19,7 @@ pipeline {
                     agent { label "linux-ci" }
                     environment {
                         GIT_CACHE_PATH = "${HOME}/cache"
+                        SCCACHE_BUCKET = 'sccache-brave-browser-lin'
                     }
                     stages {
                         stage('install') {
@@ -49,7 +50,7 @@ pipeline {
                                     npm config --userconfig=.npmrc set brave_google_api_key ${BRAVE_GOOGLE_API_KEY}
                                     npm config --userconfig=.npmrc set google_api_endpoint "safebrowsing.brave.com"
                                     npm config --userconfig=.npmrc set google_api_key "dummytoken"
-                                    # npm config --userconfig=.npmrc set sccache "sccache"
+                                    npm config --userconfig=.npmrc set sccache "sccache"
 
                                     npm run build -- Release --channel=${CHANNEL} --debug_build=false --official_build=true
                                 """
@@ -109,6 +110,7 @@ pipeline {
                     agent { label "mac-ci" }
                     environment {
                         GIT_CACHE_PATH = "${HOME}/cache"
+                        SCCACHE_BUCKET = 'sccache-brave-browser-mac'
                     }
                     stages {
                         stage('install') {
@@ -190,6 +192,192 @@ pipeline {
                             post {
                                 always {
                                     archiveArtifacts artifacts: 'src/out/Release/**/*.dmg', fingerprint: true
+                                }
+                            }
+                        }
+                    }
+                }
+                stage("windows-x64") {
+                    agent { label "windows-ci" }
+                    environment {
+                        GIT_CACHE_PATH = "$USERPROFILE\\cache"
+                        SCCACHE_BUCKET = 'sccache-brave-browser-win'
+                        PATH = "$PATH;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.17134.0\\x64\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\Common7\\IDE\\Remote Debugger\\x64"
+                        SIGNTOOL_ARGS = "sign /t  http://timestamp.verisign.com/scripts/timstamp.dll  /fd sha256 /sm"
+                    }
+                    stages {
+                        stage('install') {
+                            steps {
+                                powershell 'npm install'
+                            }
+                        }
+                        stage('init') {
+                            when {
+                                not {
+                                    expression { return fileExists('src/brave/package.json') }
+                                }
+                            }
+                            steps {
+                                powershell 'npm run init'
+                            }
+                        }
+                        stage('sync') {
+                            steps {
+                                powershell 'npm run sync --all'
+                            }
+                        }
+                        stage('build') {
+                            steps {
+                                powershell """
+                                    npm config --userconfig=.npmrc set brave_referrals_api_key ${REFERRAL_API_KEY}
+                                    npm config --userconfig=.npmrc set brave_google_api_endpoint https://location.services.mozilla.com/v1/geolocate?key=
+                                    npm config --userconfig=.npmrc set brave_google_api_key ${BRAVE_GOOGLE_API_KEY}
+                                    npm config --userconfig=.npmrc set google_api_endpoint "safebrowsing.brave.com"
+                                    npm config --userconfig=.npmrc set google_api_key "dummytoken"
+                                    # npm config --userconfig=.npmrc set sccache "sccache"
+
+                                    npm run build -- Release --channel=${CHANNEL} --debug_build=false --official_build=true
+                                """
+                            }
+                        }
+                        stage('test-security') {
+                            steps {
+                                script {
+                                    try {
+                                        powershell 'npm run test-security -- --output_path="src/out/Release/brave.exe"'
+                                    }
+                                    catch (ex) {
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                            }
+                        }
+                        stage('test-unit') {
+                            steps {
+                                script {
+                                    try {
+                                        powershell 'npm run test -- brave_unit_tests Release --output brave_unit_tests.xml'
+                                        xunit([GoogleTest(deleteOutputFiles: true, failIfNotNew: true, pattern: 'src/brave_unit_tests.xml', skipNoTestFiles: false, stopProcessingIfError: true)])
+                                    }
+                                    catch (ex) {
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                            }
+                        }
+                        stage('test-browser') {
+                            steps {
+                                script {
+                                    try {
+                                        powershell 'npm run test -- brave_browser_tests Release --output brave_browser_tests.xml'
+                                        xunit([GoogleTest(deleteOutputFiles: true, failIfNotNew: true, pattern: 'src/brave_browser_tests.xml', skipNoTestFiles: false, stopProcessingIfError: true)])
+                                    }
+                                    catch (ex) {
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                            }
+                        }
+                        stage('dist') {
+                            steps {
+                                powershell "npm run create_dist -- Release --channel=${CHANNEL} --debug_build=false --official_build=true"
+                            }
+                            post {
+                                always {
+                                    archiveArtifacts artifacts: 'src/out/Release/**/BraveBrowser*.exe,src/out/Release/**/brave_installer*.exe,src/out/Release/**/brave-*-win32-*.zip', fingerprint: true
+                                }
+                            }
+                        }
+                    }
+                }
+                stage("windows-ia32") {
+                    agent { label "windows-ci" }
+                    environment {
+                        GIT_CACHE_PATH = "$USERPROFILE\\cache"
+                        SCCACHE_BUCKET = 'sccache-brave-browser-win'
+                        PATH = "$PATH;C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.17134.0\\x64\\;C:\\Program Files (x86)\\Microsoft Visual Studio\\2017\\Community\\Common7\\IDE\\Remote Debugger\\x64"
+                        SIGNTOOL_ARGS = "sign /t  http://timestamp.verisign.com/scripts/timstamp.dll  /fd sha256 /sm"
+                    }
+                    stages {
+                        stage('install') {
+                            steps {
+                                powershell 'npm install'
+                            }
+                        }
+                        stage('init') {
+                            when {
+                                not {
+                                    expression { return fileExists('src/brave/package.json') }
+                                }
+                            }
+                            steps {
+                                powershell 'npm run init'
+                            }
+                        }
+                        stage('sync') {
+                            steps {
+                                powershell 'npm run sync --all'
+                            }
+                        }
+                        stage('build') {
+                            steps {
+                                powershell """
+                                    npm config --userconfig=.npmrc set brave_referrals_api_key ${REFERRAL_API_KEY}
+                                    npm config --userconfig=.npmrc set brave_google_api_endpoint https://location.services.mozilla.com/v1/geolocate?key=
+                                    npm config --userconfig=.npmrc set brave_google_api_key ${BRAVE_GOOGLE_API_KEY}
+                                    npm config --userconfig=.npmrc set google_api_endpoint "safebrowsing.brave.com"
+                                    npm config --userconfig=.npmrc set google_api_key "dummytoken"
+                                    # npm config --userconfig=.npmrc set sccache "sccache"
+
+                                    npm run build -- Release --channel=${CHANNEL} --debug_build=false --official_build=true
+                                """
+                            }
+                        }
+                        stage('test-security') {
+                            steps {
+                                script {
+                                    try {
+                                        powershell 'npm run test-security -- --output_path="src/out/Release/brave.exe"'
+                                    }
+                                    catch (ex) {
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                            }
+                        }
+                        stage('test-unit') {
+                            steps {
+                                script {
+                                    try {
+                                        powershell 'npm run test -- brave_unit_tests Release --output brave_unit_tests.xml'
+                                        xunit([GoogleTest(deleteOutputFiles: true, failIfNotNew: true, pattern: 'src/brave_unit_tests.xml', skipNoTestFiles: false, stopProcessingIfError: true)])
+                                    }
+                                    catch (ex) {
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                            }
+                        }
+                        stage('test-browser') {
+                            steps {
+                                script {
+                                    try {
+                                        powershell 'npm run test -- brave_browser_tests Release --output brave_browser_tests.xml'
+                                        xunit([GoogleTest(deleteOutputFiles: true, failIfNotNew: true, pattern: 'src/brave_browser_tests.xml', skipNoTestFiles: false, stopProcessingIfError: true)])
+                                    }
+                                    catch (ex) {
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                            }
+                        }
+                        stage('dist') {
+                            steps {
+                                powershell "npm run create_dist -- Release --channel=${CHANNEL} --debug_build=false --official_build=true"
+                            }
+                            post {
+                                always {
+                                    archiveArtifacts artifacts: 'src/out/Release/**/BraveBrowser*.exe,src/out/Release/**/brave_installer*.exe', fingerprint: true
                                 }
                             }
                         }
